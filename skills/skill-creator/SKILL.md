@@ -29,6 +29,17 @@ Then after the skill is done (but again, the order is flexible), you can also ru
 
 Cool? Cool.
 
+## Pi execution notes
+
+On Pi, use these substitutions for the Claude-specific execution steps below. Keep the same draft, test, grade, review, and improve loop.
+
+- Run file-producing tests in independent `pi --mode json --no-session` processes. Use the same model and thinking level for both conditions. Disable skill discovery with `--no-skills`; add `--skill <path>` only for the tested version. The baseline gets no target skill path or content. Use `--no-context-files` when inherited instructions would contaminate the comparison.
+- Prepare assertions before dispatch. Codemode can run independent CLI calls with `Promise.allSettled`, but waits for the batch; it does not provide background completion notifications. Use a read-only delegate only for read-only work.
+- Save JSON events and elapsed wall time. Confirm `agent_settled.aborted` is false and the final assistant `message_end` has `stopReason: "stop"`. Check tool results too; exit code alone does not prove success. Sum `usage.totalTokens` once per completed assistant message, not streaming updates. Store measured values in `timing.json`; leave unavailable usage unreported rather than substituting characters or zero.
+- Use the aggregator's supported `<eval-dir>/<configuration>/run-1/` layout for each run's `outputs/`, `grading.json`, and `timing.json`. Copy `eval_metadata.json` into each run directory so the viewer can find the prompt.
+- Use the existing viewer's `--static <output_path>` on remote machines. Inspect its rendering and give the user a reachable URL or file. Retrieve the downloaded `feedback.json` before iterating; do not claim a browser opened on the user's machine.
+- Description optimization uses the Pi CLI in the bundled scripts. Pass `--model provider/id:thinking` to keep model and reasoning consistent. Candidate skills are explicitly advertised, but queries do not force a read. A trigger requires a successful `read` of the candidate's `SKILL.md`. Invalid runs stop evaluation rather than counting as negative cases. Reports are saved without opening a browser unless `--open-browser` is supplied.
+
 ## Communicating with the user
 
 The skill creator is liable to be used by people across a wide range of familiarity with coding jargon. If you haven't heard (and how could you, it's only very recently that it started), there's a trend now where the power of Claude is inspiring plumbers to open up their terminals, parents and grandparents to google "how to install npm". On the other hand, the bulk of users are probably fairly computer-literate.

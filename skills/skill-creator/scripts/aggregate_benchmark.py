@@ -136,21 +136,22 @@ def load_run_results(benchmark_dir: Path) -> dict:
                 # Extract timing — check grading.json first, then sibling timing.json
                 timing = grading.get("timing", {})
                 result["time_seconds"] = timing.get("total_duration_seconds", 0.0)
+                result["tokens"] = timing.get("total_tokens")
                 timing_file = run_dir / "timing.json"
-                if result["time_seconds"] == 0.0 and timing_file.exists():
+                if timing_file.exists():
                     try:
                         with open(timing_file) as tf:
                             timing_data = json.load(tf)
-                        result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
-                        result["tokens"] = timing_data.get("total_tokens", 0)
+                        if result["time_seconds"] == 0.0:
+                            result["time_seconds"] = timing_data.get("total_duration_seconds", 0.0)
+                        if result["tokens"] is None:
+                            result["tokens"] = timing_data.get("total_tokens")
                     except json.JSONDecodeError:
                         pass
 
-                # Extract metrics if available
+                # Extract metrics if available. Characters are not token usage.
                 metrics = grading.get("execution_metrics", {})
                 result["tool_calls"] = metrics.get("total_tool_calls", 0)
-                if not result.get("tokens"):
-                    result["tokens"] = metrics.get("output_chars", 0)
                 result["errors"] = metrics.get("errors_encountered", 0)
 
                 # Extract expectations — viewer requires fields: text, passed, evidence
@@ -189,18 +190,19 @@ def aggregate_results(results: dict) -> dict:
             run_summary[config] = {
                 "pass_rate": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
                 "time_seconds": {"mean": 0.0, "stddev": 0.0, "min": 0.0, "max": 0.0},
-                "tokens": {"mean": 0, "stddev": 0, "min": 0, "max": 0}
+                "tokens": None
             }
             continue
 
         pass_rates = [r["pass_rate"] for r in runs]
         times = [r["time_seconds"] for r in runs]
-        tokens = [r.get("tokens", 0) for r in runs]
+        tokens = [r.get("tokens") for r in runs]
 
         run_summary[config] = {
             "pass_rate": calculate_stats(pass_rates),
             "time_seconds": calculate_stats(times),
-            "tokens": calculate_stats(tokens)
+            # Partial measurements must not look like a complete-run average.
+            "tokens": calculate_stats(tokens) if all(t is not None for t in tokens) else None
         }
 
     # Calculate delta between the first two configs (if two exist)
@@ -213,12 +215,15 @@ def aggregate_results(results: dict) -> dict:
 
     delta_pass_rate = primary.get("pass_rate", {}).get("mean", 0) - baseline.get("pass_rate", {}).get("mean", 0)
     delta_time = primary.get("time_seconds", {}).get("mean", 0) - baseline.get("time_seconds", {}).get("mean", 0)
-    delta_tokens = primary.get("tokens", {}).get("mean", 0) - baseline.get("tokens", {}).get("mean", 0)
+    primary_tokens = primary.get("tokens")
+    baseline_tokens = baseline.get("tokens")
+    delta_tokens = (primary_tokens["mean"] - baseline_tokens["mean"]
+                    if primary_tokens is not None and baseline_tokens is not None else None)
 
     run_summary["delta"] = {
         "pass_rate": f"{delta_pass_rate:+.2f}",
         "time_seconds": f"{delta_time:+.1f}",
-        "tokens": f"{delta_tokens:+.0f}"
+        "tokens": f"{delta_tokens:+.0f}" if delta_tokens is not None else None
     }
 
     return run_summary
@@ -245,7 +250,7 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
                     "failed": result["failed"],
                     "total": result["total"],
                     "time_seconds": result["time_seconds"],
-                    "tokens": result.get("tokens", 0),
+                    "tokens": result.get("tokens"),
                     "tool_calls": result.get("tool_calls", 0),
                     "errors": result.get("errors", 0)
                 },
@@ -318,9 +323,12 @@ def generate_markdown(benchmark: dict) -> str:
     lines.append(f"| Time | {a_time.get('mean', 0):.1f}s ± {a_time.get('stddev', 0):.1f}s | {b_time.get('mean', 0):.1f}s ± {b_time.get('stddev', 0):.1f}s | {delta.get('time_seconds', '—')}s |")
 
     # Format tokens
-    a_tokens = a_summary.get("tokens", {})
-    b_tokens = b_summary.get("tokens", {})
-    lines.append(f"| Tokens | {a_tokens.get('mean', 0):.0f} ± {a_tokens.get('stddev', 0):.0f} | {b_tokens.get('mean', 0):.0f} ± {b_tokens.get('stddev', 0):.0f} | {delta.get('tokens', '—')} |")
+    def format_tokens(stats):
+        if stats is None:
+            return "Not measured"
+        return f"{stats['mean']:.0f} ± {stats['stddev']:.0f}"
+
+    lines.append(f"| Tokens | {format_tokens(a_summary.get('tokens'))} | {format_tokens(b_summary.get('tokens'))} | {delta.get('tokens') or 'Not measured'} |")
 
     # Notes section
     if benchmark.get("notes"):

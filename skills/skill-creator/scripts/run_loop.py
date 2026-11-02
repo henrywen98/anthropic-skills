@@ -255,6 +255,7 @@ def main():
     parser.add_argument("--model", required=True, help="Model for improvement")
     parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
     parser.add_argument("--report", default="auto", help="Generate HTML report at this path (default: 'auto' for temp file, 'none' to disable)")
+    parser.add_argument("--open-browser", action="store_true", help="Open the report on this machine (disabled by default for remote use)")
     parser.add_argument("--results-dir", default=None, help="Save all outputs (results.json, report.html, log.txt) to a timestamped subdirectory here")
     args = parser.parse_args()
 
@@ -274,9 +275,9 @@ def main():
             live_report_path = Path(tempfile.gettempdir()) / f"skill_description_report_{skill_path.name}_{timestamp}.html"
         else:
             live_report_path = Path(args.report)
-        # Open the report immediately so the user can watch
         live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>")
-        webbrowser.open(str(live_report_path))
+        if args.open_browser:
+            webbrowser.open(str(live_report_path))
     else:
         live_report_path = None
 

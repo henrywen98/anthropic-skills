@@ -1013,7 +1013,8 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviews, status: "in_progress" }),
-      }).then(() => {
+      }).then((response) => {
+        if (!response.ok) throw new Error(`Feedback save failed: ${response.status}`);
         document.getElementById("feedback-status").textContent = "Saved";
       }).catch(() => {
         // Static mode or server unavailable — no-op on auto-save,
@@ -1045,7 +1046,8 @@
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: payload,
-      }).then(() => {
+      }).then((response) => {
+        if (!response.ok) throw new Error(`Feedback save failed: ${response.status}`);
         document.getElementById("done-overlay").classList.add("visible");
       }).catch(() => {
         // Server not available (static mode) — download as file
@@ -1179,12 +1181,12 @@
         html += '<td class="' + deltaClass(delta.time_seconds) + '">' + (delta.time_seconds ? delta.time_seconds + "s" : "—") + "</td></tr>";
       }
 
-      // Tokens (only show row if data exists)
-      if (a.tokens || b.tokens) {
+      // Null means usage was not measured, not zero tokens.
+      if ("tokens" in a || "tokens" in b) {
         html += "<tr><td><strong>Tokens</strong></td>";
-        html += "<td>" + fmtStat(a.tokens, false) + "</td>";
-        html += "<td>" + fmtStat(b.tokens, false) + "</td>";
-        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "—") + "</td></tr>";
+        html += "<td>" + (a.tokens == null ? "Not measured" : fmtStat(a.tokens, false)) + "</td>";
+        html += "<td>" + (b.tokens == null ? "Not measured" : fmtStat(b.tokens, false)) + "</td>";
+        html += '<td class="' + deltaClass(delta.tokens) + '">' + (delta.tokens || "Not measured") + "</td></tr>";
       }
 
       html += "</tbody></table>";
