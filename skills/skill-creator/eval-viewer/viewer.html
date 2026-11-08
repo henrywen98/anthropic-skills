@@ -1133,7 +1133,9 @@
       if (metadata.skill_name) html += "<strong>" + escapeHtml(metadata.skill_name) + "</strong> &mdash; ";
       if (metadata.timestamp) html += metadata.timestamp + " &mdash; ";
       if (metadata.evals_run) html += "Evals: " + metadata.evals_run.join(", ") + " &mdash; ";
-      html += (metadata.runs_per_configuration || "?") + " runs per configuration";
+      html += metadata.runs_per_configuration != null ? metadata.runs_per_configuration + " runs per eval/configuration" : "Uneven or missing run counts";
+      html += " &mdash; Model: " + escapeHtml(metadata.executor_model || "Not uniformly recorded");
+      html += " &mdash; Human review: " + escapeHtml(metadata.human_review_status || "pending");
       html += "</p>";
 
       // Summary table

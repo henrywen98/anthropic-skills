@@ -18,6 +18,7 @@ class BenchmarkTokenTests(unittest.TestCase):
         run.mkdir(parents=True)
         grading = {
             "summary": {"pass_rate": 1, "passed": 1, "failed": 0, "total": 1},
+            "expectations": [{"text": "Fixture passes", "passed": True, "evidence": "Synthetic test evidence"}],
             "execution_metrics": {"output_chars": 1234},
         }
         if grading_timing is not None:

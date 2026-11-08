@@ -32,7 +32,8 @@ Defines the evals for a skill. Located at `evals/evals.json` within the skill di
 - `evals[].prompt`: The task to execute
 - `evals[].expected_output`: Human-readable description of success
 - `evals[].files`: Optional list of input file paths (relative to skill root)
-- `evals[].expectations`: List of verifiable statements
+- `evals[].expectations`: List of verifiable statements, fixed before dispatch
+- `evals[].suite`: `basic` for explicit acceptance checks or `comparative` for natural requests that do not reveal the defect
 
 ---
 
@@ -290,7 +291,12 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
   - `skill_name`: Name of the skill
   - `timestamp`: When the benchmark was run
   - `evals_run`: List of eval names or IDs
-  - `runs_per_configuration`: Number of runs per config (e.g. 3)
+  - `executor_model`: Observed provider/model and thinking level when uniform across all accepted runs; otherwise `null`
+  - `executor_models`: All observed model selections; missing observations are not inferred from a command
+  - `runs_per_configuration`: Actual runs per eval/configuration cell when uniform and nonzero; otherwise `null`
+  - `run_counts`: Actual accepted counts, keyed by configuration and eval ID, including zero cells
+  - `comparison_verified`: Matched case/run pairs with successful execution and uniform observed model/thinking evidence
+  - `human_review_status`: `pending`, `in_progress`, `submitted`, or `invalid`; submitted does not mean approved
 - `runs[]`: Individual run results
   - `eval_id`: Numeric eval identifier
   - `eval_name`: Human-readable eval name (used as section header in the viewer)
@@ -300,7 +306,11 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
 - `run_summary`: Statistical aggregates per configuration
   - `with_skill` / `without_skill`: Each contains `pass_rate`, `time_seconds`, `tokens` objects with `mean` and `stddev` fields
   - `delta`: Difference strings like `"+0.50"`, `"+13.0"`, `"+1700"`
-- `notes`: Freeform observations from the analyzer
+- `excluded_runs`: Paths and reasons for executions or grades excluded from aggregation
+- `suite_summaries`: Separate summaries for basic and comparative cases; unlabeled legacy cases remain `unspecified`
+- `notes`: Evidence limitations and observations
+
+The aggregator checks `run-status.json`, optional `execution.json`, and Pi `events.jsonl` when present. It rejects aborted runs, tool errors, model contradictions, and scores that conflict with per-assertion evidence. Legacy grades without execution metadata remain explicitly unverified. Keep unknown values unknown rather than filling placeholders.
 
 **Important:** The viewer reads these field names exactly. Using `config` instead of `configuration`, or putting `pass_rate` at the top level of a run instead of nested under `result`, will cause the viewer to show empty/zero values. Always reference this schema when generating benchmark.json manually.
 

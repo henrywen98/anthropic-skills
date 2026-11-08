@@ -13,7 +13,7 @@ At a high level, the process of creating a skill goes like this:
 - Write a draft of the skill
 - Create a few test prompts and run claude-with-access-to-the-skill on them
 - Help the user evaluate the results both qualitatively and quantitatively
-  - While the runs happen in the background, draft some quantitative evals if there aren't any (if there are some, you can either use as is or modify if you feel something needs to change about them). Then explain them to the user (or if they already existed, explain the ones that already exist)
+  - Before dispatch, fix the test prompts, ground truth, and assertions. While runs execute, prepare review materials and explain the checks.
   - Use the `eval-viewer/generate_review.py` script to show the user the results for them to look at, and also let them look at the quantitative metrics
 - Rewrite the skill based on feedback from the user's evaluation of the results (and also if there are any glaring flaws that become apparent from the quantitative benchmarks)
 - Repeat until you're satisfied
@@ -69,6 +69,15 @@ Start by understanding the user's intent. The current conversation might already
 Proactively ask questions about edge cases, input/output formats, example files, success criteria, and dependencies. Wait to write test prompts until you've got this part ironed out.
 
 Check available MCPs - if useful for research (searching docs, finding similar skills, looking up best practices), research in parallel via subagents if available, otherwise inline. Come prepared with context to reduce burden on the user.
+
+### Choose the delivery layout
+
+Follow the target repository's layout before creating artifacts. Keep reusable methods, test cases, acceptance criteria, and runners with the skill.
+Default to `references/` for methods and `evals/` for evaluation definitions, commands, and scripts.
+Store local outputs under `evals/runs/<run-id>/` and exclude that directory from Git. Location and publication are separate decisions.
+Keep sensitive evidence local. Use relative paths in reusable scripts and document dependencies.
+Before delivery, verify that a maintainer can find the method, run tests, and inspect results from the skill directory.
+The current packager excludes root `evals/`; disclose this when delivering a `.skill` archive instead of a repository checkout.
 
 ### Write the SKILL.md
 
@@ -153,7 +162,13 @@ Try to explain to the model why things are important in lieu of heavy-handed mus
 
 After writing the skill draft, come up with 2-3 realistic test prompts — the kind of thing a real user would actually say. Share them with the user: [you don't have to use this exact language] "Here are a few test cases I'd like to try. Do these look right, or do you want to add more?" Then run them.
 
-Save test cases to `evals/evals.json`. Don't write assertions yet — just the prompts. You'll draft assertions in the next step while the runs are in progress.
+Save test cases and fixed expectations to `evals/evals.json` before dispatch. Separate two purposes:
+- **Basic acceptance:** explicit conditions test correctness, required pauses, and unnecessary interruptions.
+- **Comparative evaluation:** natural requests do not reveal the defect or desired reasoning. Compare against the baseline without outcome hints.
+
+Compute ground truth before testing. Confirm that examples actually exercise the claimed distinction, such as a ranking reversal.
+Keep new comparative cases separate from examples used to tune the skill. Freeze prompts and assertions for each comparison.
+Both conditions passing proves acceptance on those cases, not added value. Include unnecessary questions, artifacts, reference reads, time, and tokens in the review.
 
 ```json
 {
@@ -175,7 +190,7 @@ See `references/schemas.md` for the full schema (including the `assertions` fiel
 
 This section is one continuous sequence — don't stop partway through. Do NOT use `/skill-test` or any other testing skill.
 
-Put results in `<skill-name>-workspace/` as a sibling to the skill directory. Within the workspace, organize results by iteration (`iteration-1/`, `iteration-2/`, etc.) and within that, each test case gets a directory (`eval-0/`, `eval-1/`, etc.). Don't create all of this upfront — just create directories as you go.
+Use the chosen delivery layout. By default, `<workspace>` is `<skill>/evals/runs/<run-id>/`, excluded from Git. Keep iterations and per-case directories there. Create directories only as needed.
 
 ### Step 1: Spawn all runs (with-skill AND baseline) in the same turn
 
@@ -194,9 +209,9 @@ Execute this task:
 
 **Baseline run** (same prompt, but the baseline depends on context):
 - **Creating a new skill**: no skill at all. Same prompt, no skill path, save to `without_skill/outputs/`.
-- **Improving an existing skill**: the old version. Before editing, snapshot the skill (`cp -r <skill-path> <workspace>/skill-snapshot/`), then point the baseline subagent at the snapshot. Save to `old_skill/outputs/`.
+- **Improving an existing skill**: use the old version. Snapshot reusable files before editing, excluding run artifacts and output directories. Keep the snapshot from being automatically discovered as another skill; Pi can explicitly load a renamed Markdown snapshot. Save results under `old_skill/outputs/`.
 
-Write an `eval_metadata.json` for each test case (assertions can be empty for now). Give each eval a descriptive name based on what it's testing — not just "eval-0". Use this name for the directory too. If this iteration uses new or modified eval prompts, create these files for each new eval directory — don't assume they carry over from previous iterations.
+Write an `eval_metadata.json` for each test case with its fixed assertions and `suite` (`basic` or `comparative`). Give each eval a descriptive name based on what it's testing — not just "eval-0". Use this name for the directory too. If this iteration uses new or modified eval prompts, create these files for each new eval directory — don't assume they carry over from previous iterations.
 
 ```json
 {
@@ -207,13 +222,13 @@ Write an `eval_metadata.json` for each test case (assertions can be empty for no
 }
 ```
 
-### Step 2: While runs are in progress, draft assertions
+### Step 2: While runs are in progress, prepare review
 
-Don't just wait for the runs to finish — you can use this time productively. Draft quantitative assertions for each test case and explain them to the user. If assertions already exist in `evals/evals.json`, review them and explain what they check.
+Explain the fixed assertions and prepare deterministic checks and review materials. Do not change scoring criteria after seeing outputs; record defects for a new evaluation version.
 
 Good assertions are objectively verifiable and have descriptive names — they should read clearly in the benchmark viewer so someone glancing at the results immediately understands what each one checks. Subjective skills (writing style, design quality) are better evaluated qualitatively — don't force assertions onto things that need human judgment.
 
-Update the `eval_metadata.json` files and `evals/evals.json` with the assertions once drafted. Also explain to the user what they'll see in the viewer — both the qualitative outputs and the quantitative benchmark.
+Keep the fixed assertions consistent between case metadata and `evals/evals.json`. Show both the qualitative outputs and the quantitative comparison.
 
 ### Step 3: As runs complete, capture timing data
 
@@ -241,6 +256,11 @@ Once all runs are done:
    ```
    This produces `benchmark.json` and `benchmark.md` with pass_rate, time, and tokens for each configuration, with mean ± stddev and the delta. If generating benchmark.json manually, see `references/schemas.md` for the exact schema the viewer expects.
 Put each with_skill version before its baseline counterpart.
+
+Before presenting results, run the aggregator's evidence checks. Record completed execution, observed model and thinking level, and per-assertion grading evidence.
+Missing metadata stays unknown; failed or aborted executions are excluded, not scored as successful answers.
+Run counts come from actual results. Reject inconsistent score summaries. Keep basic and comparative results separate.
+Human review stays pending until feedback is submitted. A submitted feedback file is not proof of approval.
 
 3. **Do an analyst pass** — read the benchmark data and surface patterns the aggregate stats might hide. See `agents/analyzer.md` (the "Analyzing Benchmark Results" section) for what to look for — things like assertions that always pass regardless of skill (non-discriminating), high-variance evals (possibly flaky), and time/token tradeoffs.
 
@@ -290,7 +310,7 @@ When the user tells you they're done, read `feedback.json`:
 }
 ```
 
-Empty feedback means the user thought it was fine. Focus your improvements on the test cases where the user had specific complaints.
+Missing feedback means review is pending. Submitted feedback may contain blank comments; blanks alone do not prove approval. Read the user's actual decision before claiming acceptance.
 
 Kill the viewer server when you're done with it:
 
@@ -328,7 +348,7 @@ After improving the skill:
 
 Keep going until:
 - The user says they're happy
-- The feedback is all empty (everything looks good)
+- The user confirms the reviewed outputs are acceptable
 - You're not making meaningful progress
 
 ---

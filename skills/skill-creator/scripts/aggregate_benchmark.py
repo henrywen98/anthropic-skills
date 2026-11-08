@@ -41,6 +41,11 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+try:
+    from .benchmark_evidence import inspect_run, make_metadata
+except ImportError:
+    from benchmark_evidence import inspect_run, make_metadata
+
 
 def calculate_stats(values: list[float]) -> dict:
     """Calculate mean, stddev, min, max for a list of values."""
@@ -64,7 +69,7 @@ def calculate_stats(values: list[float]) -> dict:
     }
 
 
-def load_run_results(benchmark_dir: Path) -> dict:
+def load_run_results(benchmark_dir: Path, excluded: list | None = None) -> dict:
     """
     Load all run results from a benchmark directory.
 
@@ -82,13 +87,16 @@ def load_run_results(benchmark_dir: Path) -> dict:
         return {}
 
     results: dict[str, list] = {}
+    excluded = excluded if excluded is not None else []
 
     for eval_idx, eval_dir in enumerate(sorted(search_dir.glob("eval-*"))):
         metadata_path = eval_dir / "eval_metadata.json"
+        metadata = {}
         if metadata_path.exists():
             try:
                 with open(metadata_path) as mf:
-                    eval_id = json.load(mf).get("eval_id", eval_idx)
+                    metadata = json.load(mf)
+                    eval_id = metadata.get("eval_id", eval_idx)
             except (json.JSONDecodeError, OSError):
                 eval_id = eval_idx
         else:
@@ -98,7 +106,7 @@ def load_run_results(benchmark_dir: Path) -> dict:
                 eval_id = eval_idx
 
         # Discover config directories dynamically rather than hardcoding names
-        for config_dir in sorted(eval_dir.iterdir()):
+        for config_dir in sorted(eval_dir.iterdir(), key=lambda p: (p.name not in ("with_skill", "new_skill"), p.name)):
             if not config_dir.is_dir():
                 continue
             # Skip non-config directories (inputs, outputs, etc.)
@@ -113,24 +121,34 @@ def load_run_results(benchmark_dir: Path) -> dict:
                 grading_file = run_dir / "grading.json"
 
                 if not grading_file.exists():
-                    print(f"Warning: grading.json not found in {run_dir}")
+                    excluded.append({"path": str(run_dir.relative_to(benchmark_dir)), "reason": "Missing grading.json"})
                     continue
 
                 try:
                     with open(grading_file) as f:
                         grading = json.load(f)
-                except json.JSONDecodeError as e:
-                    print(f"Warning: Invalid JSON in {grading_file}: {e}")
+                except (json.JSONDecodeError, OSError) as e:
+                    excluded.append({"path": str(run_dir.relative_to(benchmark_dir)), "reason": str(e)})
                     continue
 
-                # Extract metrics
+                try:
+                    evidence = inspect_run(run_dir, grading)
+                    case_metadata = {**metadata, **evidence["metadata"]}
+                    if case_metadata.get("eval_id", eval_id) != eval_id:
+                        raise ValueError("Eval ID contradicts directory metadata")
+                except (ValueError, OSError, TypeError) as e:
+                    excluded.append({"path": str(run_dir.relative_to(benchmark_dir)), "reason": str(e)})
+                    continue
                 result = {
                     "eval_id": eval_id,
+                    "eval_name": case_metadata.get("eval_name", eval_dir.name),
+                    "suite": case_metadata.get("suite", "unspecified"),
                     "run_number": run_number,
-                    "pass_rate": grading.get("summary", {}).get("pass_rate", 0.0),
-                    "passed": grading.get("summary", {}).get("passed", 0),
-                    "failed": grading.get("summary", {}).get("failed", 0),
-                    "total": grading.get("summary", {}).get("total", 0),
+                    **evidence["summary"],
+                    "executor_models": evidence["executor_models"],
+                    "thinking_level_recorded": evidence["thinking_level_recorded"],
+                    "execution_verified": evidence["execution_verified"],
+                    "grading_path": str(grading_file.relative_to(benchmark_dir)),
                 }
 
                 # Extract timing — check grading.json first, then sibling timing.json
@@ -154,12 +172,8 @@ def load_run_results(benchmark_dir: Path) -> dict:
                 result["tool_calls"] = metrics.get("total_tool_calls", 0)
                 result["errors"] = metrics.get("errors_encountered", 0)
 
-                # Extract expectations — viewer requires fields: text, passed, evidence
-                raw_expectations = grading.get("expectations", [])
-                for exp in raw_expectations:
-                    if "text" not in exp or "passed" not in exp:
-                        print(f"Warning: expectation in {grading_file} missing required fields (text, passed, evidence): {exp}")
-                result["expectations"] = raw_expectations
+                # inspect_run checked score totals against these assertions.
+                result["expectations"] = grading["expectations"]
 
                 # Extract notes from user_notes_summary
                 notes_summary = grading.get("user_notes_summary", {})
@@ -233,7 +247,10 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
     """
     Generate complete benchmark.json from run results.
     """
-    results = load_run_results(benchmark_dir)
+    excluded = []
+    results = load_run_results(benchmark_dir, excluded)
+    derived_metadata = make_metadata(results, benchmark_dir)
+    results = {config: runs for config, runs in results.items() if runs}
     run_summary = aggregate_results(results)
 
     # Build runs array for benchmark.json
@@ -242,6 +259,10 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
         for result in results[config]:
             runs.append({
                 "eval_id": result["eval_id"],
+                "eval_name": result["eval_name"],
+                "suite": result["suite"],
+                "executor_models": result["executor_models"],
+                "grading_path": result["grading_path"],
                 "configuration": config,
                 "run_number": result["run_number"],
                 "result": {
@@ -267,19 +288,29 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
 
     benchmark = {
         "metadata": {
-            "skill_name": skill_name or "<skill-name>",
-            "skill_path": skill_path or "<path/to/skill>",
-            "executor_model": "<model-name>",
-            "analyzer_model": "<model-name>",
+            "skill_name": skill_name or benchmark_dir.name,
+            "skill_path": skill_path or None,
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "evals_run": eval_ids,
-            "runs_per_configuration": 3
+            **derived_metadata
         },
         "runs": runs,
         "run_summary": run_summary,
-        "notes": []  # To be filled by analyzer
+        "excluded_runs": excluded,
+        "suite_summaries": {},
+        "notes": []
     }
-
+    for suite in sorted({run["suite"] for run in runs}):
+        subset = {config: [r for r in records if r["suite"] == suite] for config, records in results.items()}
+        benchmark["suite_summaries"][suite] = aggregate_results({c: r for c, r in subset.items() if r})
+    if excluded:
+        derived_metadata["comparison_verified"] = False
+        benchmark["metadata"]["comparison_verified"] = False
+        benchmark["notes"].append(f"Excluded {len(excluded)} runs with missing, invalid, or inconsistent evidence. See excluded_runs.")
+    if not derived_metadata["comparison_verified"]:
+        benchmark["notes"].append("Matched execution, model, and thinking-level evidence is incomplete or differs. Deltas are not a verified comparison.")
+    if len(results) >= 2 and runs and all(r["result"]["pass_rate"] == 1 for r in runs):
+        benchmark["notes"].append("Both conditions pass all assertions. Added value is not established by these cases.")
+    benchmark["notes"].append(f"Human review: {derived_metadata['human_review_status']}. Submitted feedback does not imply approval.")
     return benchmark
 
 
@@ -298,9 +329,12 @@ def generate_markdown(benchmark: dict) -> str:
     lines = [
         f"# Skill Benchmark: {metadata['skill_name']}",
         "",
-        f"**Model**: {metadata['executor_model']}",
+        f"**Model**: {metadata['executor_model'] or 'Not uniformly recorded; see executor_models'}",
         f"**Date**: {metadata['timestamp']}",
-        f"**Evals**: {', '.join(map(str, metadata['evals_run']))} ({metadata['runs_per_configuration']} runs each per configuration)",
+        f"**Evals**: {', '.join(map(str, metadata['evals_run']))}",
+        f"**Runs per eval and configuration**: {metadata['runs_per_configuration'] if metadata['runs_per_configuration'] is not None else 'Uneven or missing; see run_counts'}",
+        f"**Human review**: {metadata.get('human_review_status', 'pending')}",
+        f"**Actual run counts**: `{json.dumps(metadata.get('run_counts', {}), sort_keys=True)}`",
         "",
         "## Summary",
         "",
@@ -329,6 +363,12 @@ def generate_markdown(benchmark: dict) -> str:
         return f"{stats['mean']:.0f} ± {stats['stddev']:.0f}"
 
     lines.append(f"| Tokens | {format_tokens(a_summary.get('tokens'))} | {format_tokens(b_summary.get('tokens'))} | {delta.get('tokens') or 'Not measured'} |")
+
+    for suite, summary in benchmark.get("suite_summaries", {}).items():
+        lines.extend(["", f"## Suite: {suite}", "", "| Configuration | Assertion pass rate |", "|---|---:|"])
+        for config, stats in summary.items():
+            if config != "delta":
+                lines.append(f"| {config} | {stats['pass_rate']['mean']:.1%} |")
 
     # Notes section
     if benchmark.get("notes"):
@@ -376,6 +416,12 @@ def main():
 
     # Generate benchmark
     benchmark = generate_benchmark(args.benchmark_dir, args.skill_name, args.skill_path)
+
+    if not benchmark["runs"]:
+        print("No valid graded runs. No success report was generated.")
+        for excluded in benchmark["excluded_runs"]:
+            print(f"  {excluded['path']}: {excluded['reason']}")
+        sys.exit(1)
 
     # Determine output paths
     output_json = args.output or (args.benchmark_dir / "benchmark.json")
